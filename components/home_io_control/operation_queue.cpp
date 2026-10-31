@@ -15,6 +15,8 @@ bool OperationQueue::is_background_op(PendingOperationType t) {
          t == PendingOperationType::REQUEST_BATTERY_LEVEL;
 }
 
+void OperationQueue::enqueue_command_retry(PendingOperation op) { push_control_(std::move(op)); }
+
 void OperationQueue::push_control_(PendingOperation op) {
   // The stale-poll drop assumes `device_id` names a device whose reply will supersede the poll.
   // For the ONEWAY_* types it names a controller identity instead, and a 1W command produces no

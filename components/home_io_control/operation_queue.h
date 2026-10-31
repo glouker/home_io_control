@@ -58,6 +58,9 @@ struct PendingOperation {
   uint8_t position{0};                       ///< Position/tilt value (0–100) or binary state (ON=0, OFF=100).
   uint8_t tilt{0};                           ///< Tilt value for SET_POSITION_AND_TILT (0–100).
   CoverCommand command{CoverCommand::STOP};  ///< Named command for DEVICE_COMMAND operations.
+  /// Dispatch attempt for a movement command: 0 for the user's command, N for its Nth re-queue
+  /// after the device stayed silent (see IOHomeControlComponent::schedule_command_retry_()).
+  uint8_t attempt{0};
 };
 
 /// @brief Serialized pending-operation queue with coalescing, deduplication, and two-band ordering.
@@ -99,6 +102,10 @@ class OperationQueue {
 
   /// Enqueue SET_POSITION_AND_TILT directly (no coalescing needed).
   void enqueue_set_position_and_tilt(const std::string &device_id, uint8_t position, uint8_t tilt_percent);
+
+  /// Re-queue a movement command (SET_POSITION, SET_POSITION_AND_TILT, DEVICE_COMMAND) whose
+  /// exchange got no answer, keeping its attempt counter. Same band as any control operation.
+  void enqueue_command_retry(PendingOperation op);
 
   // --- Named cover command ---
   void enqueue_device_command(const std::string &device_id, CoverCommand cmd);

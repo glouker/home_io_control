@@ -587,6 +587,10 @@ constexpr uint32_t REMOTE_POLL_TIMER_ID_TAG = 0x01000000;
 /// one another.
 constexpr uint32_t HEATING_POLL_TIMER_ID_TAG = 0x02000000;
 
+/// Namespace tag for `command_retry_timer_id()`: the delayed re-queue of a movement command that
+/// got no answer, keyed like the other per-device timers so a newer command can cancel it.
+constexpr uint32_t COMMAND_RETRY_TIMER_ID_TAG = 0x04000000;
+
 /// @brief Numeric `set_timeout()` id for a device's remote-activity poll timer (hub_status.cpp's
 /// `schedule_status_poll_()`).
 ///
@@ -610,6 +614,11 @@ inline uint32_t remote_poll_timer_id(const uint8_t node_id[NODE_ID_SIZE]) {
 /// @return Numeric timer id, unique per device and distinct from remote_poll_timer_id().
 inline uint32_t heating_poll_timer_id(const uint8_t node_id[NODE_ID_SIZE]) {
   return HEATING_POLL_TIMER_ID_TAG | (remote_poll_timer_id(node_id) & ~REMOTE_POLL_TIMER_ID_TAG);
+}
+
+/// @brief Numeric `set_timeout()` id for a device's pending movement-command re-queue.
+inline uint32_t command_retry_timer_id(const uint8_t node_id[NODE_ID_SIZE]) {
+  return COMMAND_RETRY_TIMER_ID_TAG | (remote_poll_timer_id(node_id) & ~REMOTE_POLL_TIMER_ID_TAG);
 }
 
 // === Pairing: the device behind a pairing node ===

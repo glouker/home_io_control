@@ -1266,6 +1266,13 @@ class IOHomeControlComponent : public Component,
   bool poll_heating_device_(const std::string &device_id);
   /// Pop next pending operation from the queue and execute it (set position, request status, discover).
   void process_pending_operation_();
+  /// Re-queue @p op after COMMAND_RETRY_DELAYS_MS[op.attempt] if it has re-queues left.
+  void schedule_command_retry_(const PendingOperation &op);
+  /// Drop a pending re-queue for @p device_id (a newer command supersedes it).
+  void cancel_command_retry_(const std::string &device_id);
+  /// Set by exchange_and_record_() when an exchange ended without any usable reply; read by
+  /// process_pending_operation_() to tell a silent device from a rejected command.
+  bool last_exchange_silent_{false};
 
   // --- Exchange helpers (thin wrappers delegating to ExchangeEngine) ---
 

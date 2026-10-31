@@ -197,6 +197,7 @@ IOHomeControlComponent::RequestResult IOHomeControlComponent::exchange_and_recor
   const bool warn_on_no_response = options.warn_on_no_response;
   const uint32_t retry_after_fail_ms = options.retry_after_fail_ms;
   const ExchangeOutcome outcome = this->exchange_past_device_event_(request, response, options.max_tries);
+  this->last_exchange_silent_ = outcome == ExchangeOutcome::FAILED;
   // An unconfirmed acceptance means the device authenticated the request but never closed the
   // exchange. Whether that counts as success depends entirely on what the request was *for*:
   //   - a command (CMD_EXECUTE) is treated as done. The device has it, and most devices that end
@@ -1032,6 +1033,7 @@ bool IOHomeControlComponent::poll_heating_device_(const std::string &device_id) 
 }
 
 void IOHomeControlComponent::queue_set_device_position(const std::string &device_id, uint8_t position) {
+  this->cancel_command_retry_(device_id);
   if (queue_guard_rejects(this, device_id, QUEUE_GUARD_COVER)) {
     // control() applies the optimistic prediction before calling this method, so a queue-time
     // guard rejection is a command that will not happen and must withdraw it, exactly as
@@ -1057,6 +1059,7 @@ void IOHomeControlComponent::queue_set_device_position(const std::string &device
 }
 
 bool IOHomeControlComponent::queue_device_command(const std::string &device_id, CoverCommand cmd) {
+  this->cancel_command_retry_(device_id);
   const IoDevice *dev = this->get_device(device_id);
   // Every false return below is a command that will not happen; control() (STOP →
   // apply_optimistic_stop) already predicted, so withdraw it — see queue_set_device_position().
@@ -1077,6 +1080,7 @@ bool IOHomeControlComponent::queue_device_command(const std::string &device_id, 
 }
 
 void IOHomeControlComponent::queue_set_device_tilt(const std::string &device_id, uint8_t tilt_percent) {
+  this->cancel_command_retry_(device_id);
   if (queue_guard_rejects(this, device_id, QUEUE_GUARD_TILT)) {
     // Withdraw the entity's optimistic prediction — see queue_set_device_position().
     this->registry_.rollback_optimistic(device_id);
@@ -1101,6 +1105,7 @@ void IOHomeControlComponent::queue_set_device_tilt(const std::string &device_id,
 
 void IOHomeControlComponent::queue_set_device_position_and_tilt(const std::string &device_id, uint8_t position,
                                                                 uint8_t tilt_percent) {
+  this->cancel_command_retry_(device_id);
   if (queue_guard_rejects(this, device_id, QUEUE_GUARD_POSITION_AND_TILT)) {
     // Withdraw the entity's optimistic prediction — see queue_set_device_position().
     this->registry_.rollback_optimistic(device_id);
@@ -1220,6 +1225,34 @@ void IOHomeControlComponent::execute_oneway_unenroll_(const std::string &control
   this->execute_oneway_([&] { this->oneway_transmitter_.send_unenrollment(controller_id); });
 }
 
+void IOHomeControlComponent::schedule_command_retry_(const PendingOperation &op) {
+  // Only a device that never answered is worth asking again; a refusal or a capability rejection
+  // would fail the same way.
+  if (!this->last_exchange_silent_)
+    return;
+  uint8_t node_id[NODE_ID_SIZE];
+  if (!hex_to_bytes(op.device_id, node_id, NODE_ID_SIZE))
+    return;
+  if (op.attempt >= COMMAND_RETRY_MAX) {
+    ESP_LOGW(detail::TAG, "Device %s: command still unanswered after %u re-queues, giving up", op.device_id.c_str(),
+             op.attempt);
+    return;
+  }
+  const uint32_t delay_ms = COMMAND_RETRY_DELAYS_MS[op.attempt];
+  PendingOperation retry = op;
+  retry.attempt++;
+  ESP_LOGW(detail::TAG, "Device %s silent: re-queueing command in %" PRIu32 " ms (re-queue %u/%u)",
+           op.device_id.c_str(), delay_ms, retry.attempt, COMMAND_RETRY_MAX);
+  this->set_timeout(decisions::command_retry_timer_id(node_id), delay_ms,
+                    [this, retry]() { this->op_queue_.enqueue_command_retry(retry); });
+}
+
+void IOHomeControlComponent::cancel_command_retry_(const std::string &device_id) {
+  uint8_t node_id[NODE_ID_SIZE];
+  if (hex_to_bytes(device_id, node_id, NODE_ID_SIZE))
+    this->cancel_timeout(decisions::command_retry_timer_id(node_id));
+}
+
 void IOHomeControlComponent::process_pending_operation_() {
   if (this->busy_ || this->op_queue_.empty())
     return;
@@ -1231,18 +1264,22 @@ void IOHomeControlComponent::process_pending_operation_() {
     return;
   const PendingOperation &operation = *opt;
 
+  this->last_exchange_silent_ = false;
   switch (operation.type) {
     case PendingOperationType::SET_POSITION:
-      this->set_device_position(operation.device_id, operation.position);
+      if (!this->set_device_position(operation.device_id, operation.position))
+        this->schedule_command_retry_(operation);
       break;
     case PendingOperationType::SET_TILT:
       this->set_device_tilt(operation.device_id, operation.position);
       break;
     case PendingOperationType::SET_POSITION_AND_TILT:
-      this->set_device_position_and_tilt(operation.device_id, operation.position, operation.tilt);
+      if (!this->set_device_position_and_tilt(operation.device_id, operation.position, operation.tilt))
+        this->schedule_command_retry_(operation);
       break;
     case PendingOperationType::DEVICE_COMMAND:
-      this->execute_device_command_(operation.device_id, operation.command);
+      if (!this->execute_device_command_(operation.device_id, operation.command))
+        this->schedule_command_retry_(operation);
       break;
     case PendingOperationType::SET_LIGHT_STATE:
       // operation.position already carries the target IO position (0-100) regardless of whether

@@ -134,6 +134,16 @@ static constexpr int32_t RESPONSE_AUTH_WAIT_MS =
     RESPONSE_WAIT_MS;                                    ///< Wait for final response after challenge response
 static constexpr int32_t EXCHANGE_RETRY_DELAY_MS = 250;  ///< Gap between retries within one HA command
 static constexpr uint8_t EXCHANGE_RETRY_COUNT = 3;       ///< Attempts per command before reporting failure
+
+/// Re-queues of a movement command whose whole exchange got no answer at all.
+///
+/// Field logs (4 VELUX SSL solar shutters, 28 commands) showed silent windows of 3-8 s during which
+/// *no* low-power receiver answered a start frame, after which every device answered again. The
+/// in-exchange tries all land inside such a window (~1 s apart), so a later re-queue is what
+/// recovers the command. Each delay starts when the failed exchange ends; a newer command for the
+/// same device cancels the pending re-queue.
+static constexpr uint8_t COMMAND_RETRY_MAX = 2;
+static constexpr uint32_t COMMAND_RETRY_DELAYS_MS[COMMAND_RETRY_MAX] = {4000, 10000};
 /// Re-sends allowed for a CMD_EXECUTE the target accepted without a closing reply, within the same
 /// exchange and its retry budget. One: a second silent try says the loss is not a one-off, and a
 /// third copy of a movement command would only lengthen the blocked loop. See
